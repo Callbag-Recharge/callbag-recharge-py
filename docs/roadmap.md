@@ -70,11 +70,11 @@
 - [x] `share` (no-op — stores are multicast), `replay`
 
 ### 1.3 — utils/ resilience
-- [ ] `retry(n, backoff=...)` — retry with backoff strategies
-- [ ] `backoff` — exponential, linear, fibonacci presets
-- [ ] `with_status` — wraps source with loading/error/success status
-- [ ] `with_breaker` — circuit breaker pattern
-- [ ] `timeout` — error if no value within duration
+- [x] `retry(n, backoff=...)` — retry with backoff strategies
+- [x] `backoff` — exponential, linear, fibonacci presets
+- [x] `with_status` — wraps source with loading/error/success status
+- [x] `with_breaker` — circuit breaker pattern
+- [x] `timeout` — error if no value within duration
 
 ---
 
