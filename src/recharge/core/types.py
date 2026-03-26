@@ -4,39 +4,18 @@ from __future__ import annotations
 
 from typing import Any, Protocol, TypeVar
 
-from .protocol import Signal  # noqa: TC001
+from ..raw.protocol import Signal as Signal  # noqa: TC001
+from ..raw.protocol import Sink as Sink  # noqa: TC001
+from ..raw.protocol import Source as Source  # noqa: TC001
+from ..raw.protocol import Talkback as Talkback  # noqa: TC001
 
 T = TypeVar("T")
 T_co = TypeVar("T_co", covariant=True)
-T_contra = TypeVar("T_contra", contravariant=True)
 
 
 # ---------------------------------------------------------------------------
-# Public protocol classes
+# Public protocol classes (Sink, Talkback, Source imported from raw/)
 # ---------------------------------------------------------------------------
-
-
-class Sink(Protocol[T_contra]):
-    """Receives signals from upstream (source → sink direction)."""
-
-    def next(self, value: T_contra, /) -> None: ...
-    def signal(self, sig: Signal, /) -> None: ...
-    def complete(self) -> None: ...
-    def error(self, err: Exception, /) -> None: ...
-
-
-class Talkback(Protocol):
-    """Sends signals upstream (sink → source direction)."""
-
-    def pull(self) -> None: ...
-    def stop(self) -> None: ...
-    def signal(self, sig: Signal, /) -> None: ...
-
-
-class Source(Protocol[T_co]):
-    """Subscribable — the subscribe handshake."""
-
-    def subscribe(self, sink: Sink[T_co], /) -> Talkback: ...
 
 
 class Store(Protocol[T_co]):

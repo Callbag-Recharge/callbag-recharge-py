@@ -45,7 +45,7 @@ indent-width = 4
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM", "TCH"]
+select = ["E", "F", "I", "UP", "B", "SIM", "TC"]
 
 [tool.ruff.format]
 quote-style = "double"

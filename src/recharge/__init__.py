@@ -25,6 +25,15 @@ from .core import (
     state,
     subscribe,
 )
+from .raw import (
+    first_value_from,
+    from_any,
+    from_async_iter,
+    from_awaitable,
+    from_iter,
+    from_timer,
+    raw_subscribe,
+)
 
 __all__ = [
     # Enums
@@ -54,4 +63,12 @@ __all__ = [
     "subscribe",
     # Utilities
     "is_lifecycle_signal",
+    # Raw primitives
+    "raw_subscribe",
+    "from_iter",
+    "from_timer",
+    "first_value_from",
+    "from_awaitable",
+    "from_async_iter",
+    "from_any",
 ]

@@ -6,19 +6,10 @@ from contextlib import contextmanager
 from enum import Enum, auto
 from typing import TYPE_CHECKING
 
+from ..raw.protocol import Signal as Signal
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
-
-
-class Signal(Enum):
-    """Control signals for the reactive graph."""
-
-    DIRTY = auto()
-    RESOLVED = auto()
-    RESET = auto()
-    PAUSE = auto()
-    RESUME = auto()
-    TEARDOWN = auto()
 
 
 class NodeStatus(Enum):
