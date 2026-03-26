@@ -81,8 +81,13 @@
 ## Phase 2: Concurrency
 
 ### 2.1 — Thread-safe reads
-- [ ] Lock-free `get()` — atomic reference reads
+- [x] Lock-free `get()` — atomic reference reads
 - [ ] Validate on GIL and free-threaded (3.13t/3.14t) builds
+- [x] Basic concurrent-read stress tests added (`tests/test_concurrency.py`)
+- [ ] Deferred: protocol-level concurrency validation under contention
+  - [ ] Signal sequencing checks (DIRTY→DATA / DIRTY→RESOLVED) during concurrent reads/writes
+  - [ ] Diamond convergence race stress under concurrent writes
+  - [ ] Completion/error/teardown propagation under concurrent access
 
 ### 2.2 — Per-subgraph write locks
 - [ ] Union-Find for subgraph detection
