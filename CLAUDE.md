@@ -29,6 +29,7 @@ See [docs/architecture.md](docs/architecture.md) for the full design.
 |-----|----------------|-------------|
 | [docs/architecture.md](docs/architecture.md) | Protocol, primitives, signal flow, concurrency model, folder structure | Modifying core, adding operators, import rule questions |
 | [docs/roadmap.md](docs/roadmap.md) | Phased implementation plan | Planning next work |
+| [docs/test-guidance.md](docs/test-guidance.md) | Test organization, patterns, observer tools, concurrency tests | Writing tests |
 
 ## Design invariants
 

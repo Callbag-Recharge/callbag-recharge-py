@@ -13,36 +13,37 @@
 - [x] Folder structure with dependency tiers
 - [x] Design session archived
 
-### 0.2 — Protocol & core primitives
-- [ ] `Signal` enum (DIRTY, RESOLVED, RESET, PAUSE, RESUME, TEARDOWN)
-- [ ] `Sink`, `Talkback`, `Source` Protocol classes
-- [ ] `State` — mutable source with `get()`, `set()`, `update()`
-- [ ] `Derived` — computed from deps with lazy connect/disconnect
-- [ ] `Effect` — terminal sink, runs when deps settle
-- [ ] `Producer` — custom source (async wrapping, timers, etc.)
-- [ ] `Operator` — custom transform
-- [ ] `pipe()` function and `|` operator overload
-- [ ] `batch()` context manager
-- [ ] Node status tracking (DISCONNECTED, DIRTY, SETTLED, RESOLVED, COMPLETED, ERRORED)
+### 0.2 — Protocol & core primitives ✅
+- [x] `Signal` enum (DIRTY, RESOLVED, RESET, PAUSE, RESUME, TEARDOWN)
+- [x] `Sink`, `Talkback`, `Source` Protocol classes
+- [x] `State` — mutable source with `get()`, `set()`, `update()`
+- [x] `Derived` — computed from deps with lazy connect/disconnect
+- [x] `DynamicDerived` — runtime-tracked dependency graph
+- [x] `Effect` — terminal sink, runs when deps settle
+- [x] `Producer` — custom source (async wrapping, timers, etc.)
+- [x] `Operator` — custom transform
+- [x] `pipe()` function and `|` operator overload
+- [x] `batch()` context manager
+- [x] Node status tracking (DISCONNECTED, DIRTY, SETTLED, RESOLVED, COMPLETED, ERRORED)
 
-### 0.3 — Diamond resolution & two-phase push
-- [ ] Bitmask for multi-dep convergence (Python `int`)
-- [ ] DIRTY propagation (phase 1)
-- [ ] DATA propagation (phase 2)
-- [ ] RESOLVED signal for unchanged values
-- [ ] Single-dep fast path (no bitmask)
+### 0.3 — Diamond resolution & two-phase push ✅
+- [x] Bitmask for multi-dep convergence (Python `int`)
+- [x] DIRTY propagation (phase 1)
+- [x] DATA propagation (phase 2)
+- [x] RESOLVED signal for unchanged values
+- [x] Single-dep fast path (no bitmask)
 
-### 0.4 — Output slot & lifecycle
-- [ ] Lazy output slot: None → single → set
-- [ ] `_lazy_connect()` / disconnect on last unsub
-- [ ] RESET, PAUSE, RESUME, TEARDOWN signal propagation
-- [ ] `subscribe()` — lightweight single-dep sink
-- [ ] Context manager support (`with subscribe(store) as sub:`)
+### 0.4 — Output slot & lifecycle ✅
+- [x] Lazy output slot: None → single → set
+- [x] `_lazy_connect()` / disconnect on last unsub
+- [x] RESET, PAUSE, RESUME, TEARDOWN signal propagation
+- [x] `subscribe()` — lightweight single-dep sink
+- [x] Context manager support (`with subscribe(store) as sub:`)
 
-### 0.5 — Tests & validation
-- [ ] Port core test suite from TypeScript
-- [ ] Diamond resolution tests
-- [ ] Lifecycle signal tests
+### 0.5 — Tests & validation ✅
+- [x] Port core test suite from TypeScript (35 tests)
+- [x] Diamond resolution tests
+- [x] Lifecycle signal tests
 - [ ] `Inspector.observe()` equivalent for test assertions
 - [ ] Basic benchmarks vs manual state management
 
