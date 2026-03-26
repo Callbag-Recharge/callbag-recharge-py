@@ -304,6 +304,12 @@ class DerivedImpl:
 
     def get(self) -> Any:
         if self._connected:
+            if not self._has_cached:
+                # Cache invalidated (e.g. by RESET) — pull-compute on demand.
+                result = self._fn()
+                self._cached_value = result
+                self._has_cached = True
+                return result
             return self._cached_value
         if self._completed:
             if self._status is NodeStatus.ERRORED:

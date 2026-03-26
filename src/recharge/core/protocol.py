@@ -81,14 +81,21 @@ def batch() -> Generator[None]:
         _bs.depth -= 1
         if _bs.depth == 0 and not _bs.draining:
             _bs.draining = True
+            first_error: Exception | None = None
             try:
                 i = 0
                 while i < len(_bs.emissions):
-                    _bs.emissions[i]()
+                    try:
+                        _bs.emissions[i]()
+                    except Exception as e:
+                        if first_error is None:
+                            first_error = e
                     i += 1
             finally:
                 _bs.emissions.clear()
                 _bs.draining = False
+            if first_error is not None:
+                raise first_error
 
 
 def is_batching() -> bool:

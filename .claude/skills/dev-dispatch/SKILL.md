@@ -26,6 +26,7 @@ Read in parallel:
 - Relevant source files in the area you'll modify
 - Existing tests for the area
 - `docs/roadmap.md` — only if this is a new feature
+- **TypeScript reference:** `~/src/callbag-recharge/` — the original TypeScript implementation this project is ported from. Consult for semantics, edge cases, and behavioral reference when implementing or debugging primitives/operators.
 
 While planning, explicitly validate proposed changes against these invariants:
 - The core graph is 100% synchronous — no asyncio, no trio, no event loop in core/, raw/, extra/, utils/, data/

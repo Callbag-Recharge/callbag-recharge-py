@@ -133,11 +133,11 @@ class ProducerImpl:
 
     # --- Core operations ---
 
-    def emit(self, value: Any, *, _force: bool = False) -> None:
+    def emit(self, value: Any) -> None:
         """Set value and push DATA to all sinks."""
         if self._completed:
             return
-        if not _force and self._eq_fn is not None and self._eq_fn(self._value, value):
+        if self._eq_fn is not None and self._eq_fn(self._value, value):
             return
         self._value = value
         if self._output is None:
@@ -157,6 +157,8 @@ class ProducerImpl:
             self._dispatch_next(self._value)
 
     def _flush_pending(self) -> None:
+        if not self._pending:
+            return  # Cleared by RESET — stale deferred emission
         self._pending = False
         self._status = NodeStatus.SETTLED
         self._dispatch_next(self._value)
@@ -261,10 +263,8 @@ class ProducerImpl:
             self._pending = False
         if self._on_lifecycle_handler is not None:
             self._on_lifecycle_handler(sig)
-        if sig is Signal.RESET:
-            # Force re-emission bypassing equality guard.
-            # RESET must propagate even if value equals current.
-            self.emit(self._initial, _force=True)
+        # No auto-emit on RESET — purely lifecycle. User triggers re-run
+        # by explicitly pushing new data into the graph.
 
     # --- Subscribe ---
 

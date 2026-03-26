@@ -403,6 +403,20 @@ class DynamicDerivedImpl:
 
     def get(self) -> Any:
         if self._connected:
+            if not self._has_cached:
+                # Cache invalidated (e.g. by RESET) — pull-compute on demand.
+                self._tracked_deps = []
+                self._tracking_set = set()
+                try:
+                    result = self._tracking_fn(self._track_get)
+                except Exception:
+                    self._tracking_set = None
+                    self._tracked_deps = []
+                    raise
+                self._tracking_set = None
+                self._cached_value = result
+                self._has_cached = True
+                return result
             return self._cached_value
         if self._completed:
             if self._status is NodeStatus.ERRORED:

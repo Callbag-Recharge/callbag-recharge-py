@@ -44,8 +44,8 @@
 - [x] Port core test suite from TypeScript (35 tests)
 - [x] Diamond resolution tests
 - [x] Lifecycle signal tests
-- [ ] `Inspector.observe()` equivalent for test assertions
-- [ ] Basic benchmarks vs manual state management
+- [x] `observe()` test helper for protocol-level assertions (`tests/conftest.py`)
+- [x] Basic benchmarks vs manual state management (`benchmarks/bench_core.py`)
 
 ---
 

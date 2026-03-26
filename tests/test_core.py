@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from recharge import (
     DATA,
-    END,
     STATE,
     Signal,
     batch,
@@ -18,7 +17,6 @@ from recharge import (
     state,
     subscribe,
 )
-
 
 # ---------------------------------------------------------------------------
 # state
@@ -538,28 +536,117 @@ def test_subscription_signal_reset():
 
 
 def test_effect_reset_signal():
-    """After RESET, effect should re-run with reset dep values and stay responsive."""
+    """RESET is purely lifecycle: cleans up side effects, resets state, but does NOT
+    auto re-run the effect. User triggers re-run by explicitly pushing new data."""
     s = state(0)
     log: list[int] = []
+    cleanups: list[str] = []
 
     def fn():
-        log.append(s.get())
+        val = s.get()
+        log.append(val)
+
+        def cleanup():
+            cleanups.append(f"cleanup-{val}")
+
+        return cleanup
 
     dispose = effect([s], fn)
     assert log == [0]  # initial run
+    assert cleanups == []
 
     s.set(5)
     assert log == [0, 5]
+    assert cleanups == ["cleanup-0"]  # previous cleanup ran
 
-    # RESET: upstream state resets to initial (0) and re-emits.
-    # Effect should re-run with reset value AND remain responsive afterward.
+    # RESET: state resets to initial (0), effect cleanup runs, but NO auto re-run.
     dispose.signal(Signal.RESET)
-    assert log == [0, 5, 0]  # re-ran with reset value
+    assert log == [0, 5]  # effect did NOT re-run
+    assert cleanups == ["cleanup-0", "cleanup-5"]  # cleanup was called
+    assert s.get() == 0  # state reset to initial
 
-    # Verify effect is still responsive after RESET
+    # Verify effect is still responsive after RESET — user triggers explicitly
     s.set(10)
-    assert log == [0, 5, 0, 10]
+    assert log == [0, 5, 10]
     dispose()
+
+
+def test_derived_get_after_reset():
+    """derived.get() should pull-compute fresh value after RESET invalidates cache."""
+    a = state(10)
+    d = derived([a], lambda: a.get() * 2)
+    log: list[int] = []
+    dispose = effect([d], lambda: log.append(d.get()))
+    assert d.get() == 20
+
+    a.set(5)
+    assert d.get() == 10
+
+    # RESET: state resets to initial (10), derived cache invalidated.
+    # get() should pull-compute from the reset state, not return stale cache.
+    dispose.signal(Signal.RESET)
+    assert a.get() == 10  # state reset to initial
+    assert d.get() == 20  # derived pull-computes from reset state
+
+    # Still responsive after RESET
+    a.set(3)
+    assert d.get() == 6
+    dispose()
+
+
+def test_dynamic_derived_get_after_reset():
+    """dynamic_derived.get() should pull-compute fresh value after RESET."""
+    a = state(10)
+    dd = dynamic_derived(lambda get: get(a) * 3)
+    log: list[int] = []
+    dispose = effect([dd], lambda: log.append(dd.get()))
+    assert dd.get() == 30
+
+    a.set(5)
+    assert dd.get() == 15
+
+    dispose.signal(Signal.RESET)
+    assert a.get() == 10
+    assert dd.get() == 30  # pull-computes from reset state
+    dispose()
+
+
+def test_batch_drain_per_emission_resilience():
+    """One throwing emission should not prevent other emissions from draining."""
+    s1 = state(0)
+    s2 = state(0)
+    log: list[int] = []
+
+    # s1 subscriber throws
+    subscribe(s1, lambda v, _: (_ for _ in ()).throw(ValueError("boom")))
+    subscribe(s2, lambda v, _: log.append(v))
+
+    try:
+        with batch():
+            s1.set(1)  # will throw during drain
+            s2.set(2)  # should still drain
+    except ValueError:
+        pass
+
+    # s2's emission should have drained despite s1's exception
+    assert log == [2]
+
+
+def test_deferred_emission_skipped_after_reset():
+    """A deferred emission queued before RESET should be skipped during drain."""
+    s = state(0)
+    log: list[int] = []
+    sub = subscribe(s, lambda v, _: log.append(v))
+
+    with batch():
+        s.set(5)  # queues deferred emission
+        # RESET clears _pending — the deferred emission should bail
+        sub.signal(Signal.RESET)
+
+    # The deferred emission for set(5) should have been skipped
+    assert s.get() == 0  # reset to initial
+    assert log == []  # no emissions reached the subscriber
+    sub.unsubscribe()
 
 
 def test_state_none_equality_guard():

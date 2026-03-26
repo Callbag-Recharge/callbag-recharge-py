@@ -45,12 +45,16 @@ class _EffectState:
     def run(self) -> None:
         if self.disposed:
             return
-        if self.cleanup is not None:
-            self.cleanup()
-            self.cleanup = None
+        self._run_cleanup()
         result = self.fn()
         if callable(result):
             self.cleanup = result
+
+    def _run_cleanup(self) -> None:
+        """Run and clear cleanup. Always nulls cleanup even if it raises."""
+        if self.cleanup is not None:
+            fn, self.cleanup = self.cleanup, None
+            fn()
 
     def handle_lifecycle_signal(self, sig: Signal) -> None:
         if self.disposed:
@@ -60,9 +64,7 @@ class _EffectState:
                 tb.signal(Signal.TEARDOWN)
             self.talkbacks.clear()
             self.disposed = True
-            if self.cleanup is not None:
-                self.cleanup()
-                self.cleanup = None
+            self._run_cleanup()
             return
         if sig is Signal.RESET:
             self.generation += 1
@@ -72,6 +74,9 @@ class _EffectState:
             # Without this, all closures reject signals (stale generation).
             for i in range(len(self.sink_gens)):
                 self.sink_gens[i] = self.generation
+            # Tear down side effects from the last run.
+            # RESET means "clear transient state" — includes effect cleanup.
+            self._run_cleanup()
         for tb in self.talkbacks:
             tb.signal(sig)
 
@@ -79,9 +84,7 @@ class _EffectState:
         if self.disposed:
             return
         self.disposed = True
-        if self.cleanup is not None:
-            self.cleanup()
-            self.cleanup = None
+        self._run_cleanup()
         for tb in self.talkbacks:
             tb.stop()
         self.talkbacks.clear()
