@@ -51,22 +51,23 @@
 
 ## Phase 1: Operators & utilities
 
-### 1.1 — raw/ layer
-- [ ] `raw_subscribe` — pure protocol sink
-- [ ] `from_iter` — Iterator → source
-- [ ] `from_timer` — delay source (threading.Timer, no asyncio)
-- [ ] `first_value_from` — source → awaitable (the ONE bridge)
-- [ ] `from_awaitable` — coroutine → source
-- [ ] `from_async_iter` — async generator → source
-- [ ] `from_any` — universal normalizer (sync/coro/async gen/source)
+### 1.1 — raw/ layer ✅
+- [x] `raw_subscribe` — pure protocol sink
+- [x] `from_iter` — Iterator → source
+- [x] `from_timer` — delay source (threading.Timer, no asyncio)
+- [x] `first_value_from` — source → Future (the ONE bridge)
+- [x] `from_awaitable` — coroutine → source (framework-agnostic via `schedule` callback)
+- [x] `from_async_iter` — async generator → source (framework-agnostic via `schedule` callback)
+- [x] `from_any` — universal normalizer (sync/coro/async gen/source)
+- [x] Protocol types (`Signal`, `Sink`, `Talkback`, `Source`) moved to `raw/protocol.py`
 
-### 1.2 — extra/ operators
-- [ ] `map`, `filter`, `scan`, `take`, `skip`, `take_while`
-- [ ] `merge`, `combine`, `zip`
-- [ ] `distinct_until_changed`
-- [ ] `debounce`, `throttle`, `sample`
-- [ ] `switch_map`, `concat_map`, `flat_map`
-- [ ] `share` (no-op — stores are multicast), `replay`
+### 1.2 — extra/ operators ✅
+- [x] `map`, `filter`, `scan`, `take`, `skip`, `take_while`
+- [x] `merge`, `combine`, `zip`
+- [x] `distinct_until_changed`
+- [x] `debounce`, `throttle`, `sample`
+- [x] `switch_map`, `concat_map`, `flat_map`
+- [x] `share` (no-op — stores are multicast), `replay`
 
 ### 1.3 — utils/ resilience
 - [ ] `retry(n, backoff=...)` — retry with backoff strategies

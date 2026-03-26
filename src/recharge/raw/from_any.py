@@ -81,6 +81,4 @@ def from_any(
     return _ValueSource(value)
 
 
-_PLAIN_TYPES: frozenset[type] = frozenset(
-    {int, float, str, bytes, bool, type(None)}
-)
+_PLAIN_TYPES: frozenset[type] = frozenset({int, float, str, bytes, bool, type(None)})

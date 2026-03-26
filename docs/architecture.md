@@ -263,7 +263,48 @@ Only `orchestrate/` and `adapters/` use the runner. Core graph never touches it.
 
 ---
 
-## 6. Diamond Resolution
+## 6. Extra Operators (`extra/`)
+
+18 operators split across two tiers by implementation strategy.
+
+### Tier 1 — operator/derived-based (synchronous, no timers)
+
+| Operator | Strategy | Notes |
+|----------|----------|-------|
+| `map(fn)` | `derived` | Simple computed transform |
+| `filter(predicate)` | `operator` | Sends RESOLVED when predicate fails; tracks `dirty_forwarded` |
+| `scan(reducer, seed)` | `operator` | Accumulator; sends RESOLVED on equal accumulation |
+| `take(n)` | `operator` | Disconnects + completes after *n* values |
+| `skip(n)` | `operator` | Suppresses DIRTY/RESOLVED during skip window |
+| `take_while(predicate)` | `operator` | Disconnects + completes when predicate fails |
+| `distinct_until_changed()` | `derived` | Uses `operator.is_` equality by default |
+| `merge(*sources)` | `operator` | Multi-dep; bitmask dirty tracking; `any_data` flag prevents spurious RESOLVED |
+| `combine(*sources)` | `derived` | Multi-dep tuple; recomputes when any dep changes |
+| `zip(*sources)` | `operator` | Per-source deque buffers; `max_buffer` caps buffer size |
+
+### Tier 2 — producer-based (cycle boundaries, may use timers)
+
+| Operator | Notes |
+|----------|-------|
+| `debounce(ms)` | `threading.Timer`; clears pending reference after flush |
+| `throttle(ms)` | `threading.Timer`; leading-edge emit |
+| `sample(notifier)` | Dual subscribe; latest input emitted on notifier tick |
+| `switch_map(fn)` | Cancels previous inner on new outer; `_UNSET` sentinel for initial |
+| `concat_map(fn)` | Queues inner sources; `deque` buffer; `_UNSET` sentinel |
+| `flat_map(fn)` | Concurrent inner sources; `set` tracking; `_UNSET` sentinel |
+
+### Utility
+
+| Operator | Notes |
+|----------|-------|
+| `share` | No-op — stores are already multicast |
+| `replay` | Seeds with last value on reconnect via `actions.seed()` |
+
+All operators support `pipe()` and `|` syntax: `source | map(fn) | filter(pred) | take(5)`.
+
+---
+
+## 7. Diamond Resolution
 
 Multi-dep nodes use a bitmask to track which deps are dirty. Recompute fires only when all bits clear.
 
@@ -275,7 +316,7 @@ Python implementation: `int` (unlimited precision) — no need for `Uint32Array`
 
 ---
 
-## 7. `.get()` Semantics
+## 8. `.get()` Semantics
 
 | Status | `.get()` behavior |
 |--------|-------------------|
@@ -287,7 +328,7 @@ Python implementation: `int` (unlimited precision) — no need for `Uint32Array`
 
 ---
 
-## 8. Output Slot
+## 9. Output Slot
 
 Lazy multicast dispatch point per node:
 
@@ -302,7 +343,7 @@ On last unsubscribe: `_output = None`, disconnect from deps, status = DISCONNECT
 
 ---
 
-## 9. Lifecycle Signals
+## 10. Lifecycle Signals
 
 Flow **upstream** via `talkback.signal(sig)`:
 
@@ -315,7 +356,7 @@ Flow **upstream** via `talkback.signal(sig)`:
 
 ---
 
-## 10. Python-Specific Adaptations
+## 11. Python-Specific Adaptations
 
 ### Context managers for resource lifecycle
 
@@ -360,7 +401,7 @@ for value in iter(store):
 
 ---
 
-## 11. Comparison with TypeScript Version
+## 12. Comparison with TypeScript Version
 
 | Aspect | TypeScript | Python |
 |--------|-----------|--------|
