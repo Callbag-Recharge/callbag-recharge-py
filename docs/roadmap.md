@@ -90,9 +90,15 @@
   - [ ] Completion/error/teardown propagation under concurrent access
 
 ### 2.2 — Per-subgraph write locks
-- [ ] Union-Find for subgraph detection
-- [ ] Per-subgraph `threading.Lock`
-- [ ] Subgraph merge on cross-graph `derived`
+- [x] Union-Find for subgraph detection
+- [x] Per-subgraph `threading.RLock` (reentrant for nested same-subgraph writes)
+- [x] Subgraph merge on cross-graph `derived`
+- [x] Weak-ref registry with GC auto-cleanup (prevents `id()` reuse and unbounded growth)
+- [x] Thread-local batch state (concurrent batches isolated per thread)
+- [x] Batch drain re-acquires subgraph lock per emission (atomicity)
+- [x] `defer_set()` utility for safe cross-subgraph writes from effects
+- [x] `dynamic_derived(possible_deps, fn)` — explicit deps, construction-time unions only
+- [x] Concurrency contract documented (write safety scope, cross-subgraph writes, batch isolation)
 - [ ] Benchmark: independent set() from N threads
 
 ### 2.3 — Parallel DATA phase

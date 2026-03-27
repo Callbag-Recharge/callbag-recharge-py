@@ -1,6 +1,7 @@
 """Core primitives — foundation layer (Tier 0)."""
 
 from .bitmask import Bitmask
+from .config import configure
 from .derived import DerivedImpl, derived, derived_from
 from .dynamic_derived import DynamicDerivedImpl, dynamic_derived
 from .effect import effect
@@ -57,6 +58,7 @@ __all__ = [
     "batch",
     "subscribe",
     # Utilities
+    "configure",
     "defer_set",
     "is_lifecycle_signal",
     "Bitmask",

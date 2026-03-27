@@ -15,7 +15,7 @@ from .protocol import (
     end_deferred_start,
     is_lifecycle_signal,
 )
-from .subgraph_locks import union_nodes
+from .subgraph_locks import ensure_registered, union_nodes
 from .types import _CallbackSink
 
 
@@ -104,6 +104,7 @@ def effect(
     Call ``dispose.signal(sig)`` for lifecycle control (RESET, TEARDOWN, etc.).
     """
     es = _EffectState(fn)
+    ensure_registered(es)
     for dep in deps:
         union_nodes(es, dep)
 

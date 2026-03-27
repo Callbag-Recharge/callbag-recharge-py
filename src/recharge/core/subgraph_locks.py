@@ -5,8 +5,9 @@ Concurrency contract:
 - ``producer.emit()`` and lifecycle signal pushes are NOT covered — callers
   must synchronize externally if used from multiple threads.
 - ``get()`` is lock-free from any thread.
-- Graph construction (creating nodes, connecting deps) is NOT thread-safe.
-  Build the graph at startup before concurrent writes begin.
+- Graph construction (creating nodes, connecting deps) is safe to interleave
+  with ``set()`` calls on independent subgraphs. ``union()`` is serialized
+  against ``lock_for()`` via lock-box indirection.
 """
 
 from __future__ import annotations
@@ -16,29 +17,78 @@ import weakref
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
+from .config import get_deferred_flush_mode
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
 
 
-class _SubgraphRegistry:
-    __slots__ = ("_meta_lock", "_parent", "_rank", "_locks", "_refs")
+class _LockBox:
+    """Mutable container for a subgraph's RLock.
+
+    On union, the subsumed root's box is redirected to the canonical root's
+    lock. Any thread that already captured a box reference will dereference
+    ``.lock`` at acquisition time and get the merged lock — no TOCTOU gap.
+    """
+
+    __slots__ = ("lock",)
 
     def __init__(self) -> None:
-        self._meta_lock = threading.Lock()
+        self.lock = threading.RLock()
+
+
+class _SubgraphRegistry:
+    __slots__ = ("_meta_lock", "_parent", "_rank", "_boxes", "_refs")
+
+    def __init__(self) -> None:
+        self._meta_lock = threading.RLock()
         self._parent: dict[int, int] = {}
         self._rank: dict[int, int] = {}
-        self._locks: dict[int, threading.RLock] = {}
+        self._boxes: dict[int, _LockBox] = {}
         self._refs: dict[int, weakref.ref[object]] = {}
 
     # --- Internal helpers (must hold _meta_lock) ---
 
-    def _on_gc(self, node_id: int) -> None:
+    def _on_gc(self, node_id: int, ref_obj: weakref.ref[object]) -> None:
         """Weak-ref callback: clean up a GC'd node from the registry."""
         with self._meta_lock:
+            # Stale callback guard: node id may have been reused and rebound
+            # to a new live weakref slot before this callback executes.
+            if self._refs.get(node_id) is not ref_obj:
+                return
             self._refs.pop(node_id, None)
+            parent = self._parent.get(node_id)
+            if parent is None:
+                return
+
+            # Rewire direct children before removing the node id from DSU maps.
+            direct_children = [
+                nid for nid, p in self._parent.items() if p == node_id and nid != node_id
+            ]
+
+            if parent == node_id:
+                # Node is current root for its component. Promote one child so
+                # lock identity remains stable for surviving members.
+                if direct_children:
+                    new_root = direct_children[0]
+                    self._parent[new_root] = new_root
+                    for child in direct_children[1:]:
+                        self._parent[child] = new_root
+
+                    box = self._boxes.get(node_id)
+                    if box is not None:
+                        self._boxes[new_root] = box
+                    self._rank[new_root] = self._rank.get(new_root, self._rank.get(node_id, 0))
+                # If there are no children, the component is gone and maps can
+                # be fully removed below.
+            else:
+                # Non-root node: bypass it in any parent chains.
+                for child in direct_children:
+                    self._parent[child] = parent
+
             self._parent.pop(node_id, None)
             self._rank.pop(node_id, None)
-            self._locks.pop(node_id, None)
+            self._boxes.pop(node_id, None)
 
     def _find_locked(self, node_id: int) -> int:
         """Path-compressing find. Caller must hold _meta_lock."""
@@ -55,11 +105,15 @@ class _SubgraphRegistry:
     def _ensure_locked(self, node: object) -> int:
         """Register node if not present. Caller must hold _meta_lock. Returns node_id."""
         node_id = id(node)
-        if node_id not in self._parent:
+        existing_ref = self._refs.get(node_id)
+        existing_obj = existing_ref() if existing_ref is not None else None
+
+        # Fresh node id or stale slot from a GC'd node (id reuse): initialize.
+        if node_id not in self._parent or existing_obj is None:
             self._parent[node_id] = node_id
             self._rank[node_id] = 0
-            self._locks[node_id] = threading.RLock()
-            self._refs[node_id] = weakref.ref(node, lambda _ref: self._on_gc(node_id))
+            self._boxes[node_id] = _LockBox()
+            self._refs[node_id] = weakref.ref(node, lambda _ref: self._on_gc(node_id, _ref))
         return node_id
 
     # --- Public registry operations ---
@@ -86,21 +140,43 @@ class _SubgraphRegistry:
             if rank_a == rank_b:
                 self._rank[root_a] = rank_a + 1
 
-            # Keep a single canonical lock for the merged component.
-            self._locks.pop(root_b, None)
+            # Redirect the subsumed root's lock box to the canonical lock.
+            # Any thread that already captured box_b will dereference .lock
+            # at acquisition time and get the merged lock.
+            canonical_lock = self._boxes[root_a].lock
+            box_b = self._boxes.get(root_b)
+            if box_b is not None:
+                box_b.lock = canonical_lock
 
     @contextmanager
     def lock_for(self, node: object) -> Generator[None]:
-        with self._meta_lock:
-            node_id = self._ensure_locked(node)
-            root = self._find_locked(node_id)
-            lock = self._locks.get(root)
-            if lock is None:
-                # Root was GC'd — create a fresh lock for this node.
-                lock = threading.RLock()
-                self._locks[root] = lock
-        with lock:
-            yield
+        # Validate the lock after acquisition to avoid a union() TOCTOU race
+        # between selecting box.lock and entering the lock.
+        while True:
+            with self._meta_lock:
+                node_id = self._ensure_locked(node)
+                root = self._find_locked(node_id)
+                box = self._boxes.get(root)
+                if box is None:
+                    box = _LockBox()
+                    self._boxes[root] = box
+                lock = box.lock
+
+            lock.acquire()
+            valid = False
+            try:
+                with self._meta_lock:
+                    current_root = self._find_locked(node_id)
+                    current_box = self._boxes.get(current_root)
+                    if current_box is None:
+                        current_box = _LockBox()
+                        self._boxes[current_root] = current_box
+                    valid = current_box.lock is lock
+                if valid:
+                    yield
+                    return
+            finally:
+                lock.release()
 
 
 _REGISTRY = _SubgraphRegistry()
@@ -139,7 +215,10 @@ def _inc_deferred_depth() -> None:
 
 
 def _dec_deferred_depth() -> int:
-    depth = getattr(_deferred_tls, "depth", 1) - 1
+    current = getattr(_deferred_tls, "depth", 0)
+    if current <= 0:
+        raise RuntimeError("deferred depth underflow: lock/defer bookkeeping out of balance")
+    depth = current - 1
     _deferred_tls.depth = depth
     return depth
 
@@ -162,11 +241,26 @@ def acquire_subgraph_write_lock_with_defer(node: object) -> Generator[None]:
     finally:
         if _dec_deferred_depth() == 0:
             queue = _get_deferred_queue()
+            mode = get_deferred_flush_mode()
+            first_error: BaseException | None = None
             while queue:
                 pending = queue[:]
                 queue.clear()
                 for fn in pending:
-                    fn()
+                    if mode == "strict":
+                        try:
+                            fn()
+                        except BaseException as e:  # noqa: BLE001 - strict mode is explicit
+                            if first_error is None:
+                                first_error = e
+                    else:
+                        try:
+                            fn()
+                        except Exception as e:
+                            if first_error is None:
+                                first_error = e
+            if first_error is not None:
+                raise first_error
 
 
 def defer_set(target: Any, value: Any) -> None:

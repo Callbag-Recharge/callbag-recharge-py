@@ -78,7 +78,7 @@ def batch() -> Generator[None]:
     Each thread has its own batch context — batches do not span threads.
     """
     # Import here to avoid circular import at module level.
-    from .subgraph_locks import acquire_subgraph_write_lock
+    from .subgraph_locks import acquire_subgraph_write_lock_with_defer
 
     bs = _get_batch_state()
     bs.depth += 1
@@ -94,7 +94,7 @@ def batch() -> Generator[None]:
                 while i < len(bs.emissions):
                     node, fn = bs.emissions[i]
                     try:
-                        with acquire_subgraph_write_lock(node):
+                        with acquire_subgraph_write_lock_with_defer(node):
                             fn()
                     except Exception as e:
                         if first_error is None:
@@ -123,7 +123,12 @@ def defer_emission(node: object, fn: Callable[[], None]) -> None:
 
 # ---------------------------------------------------------------------------
 # Connection batching — defers producer start() until all deps are wired
+#
+# Each thread has its own connection state so concurrent graph construction
+# on independent subgraphs is isolated.
 # ---------------------------------------------------------------------------
+
+_connect_tls = threading.local()
 
 
 class _ConnectState:
@@ -134,27 +139,36 @@ class _ConnectState:
         self.pending: list[Callable[[], None]] = []
 
 
-_cs = _ConnectState()
+def _get_connect_state() -> _ConnectState:
+    cs: _ConnectState | None = getattr(_connect_tls, "state", None)
+    if cs is None:
+        cs = _ConnectState()
+        _connect_tls.state = cs
+    return cs
 
 
 def begin_deferred_start() -> None:
     """Begin deferring producer start() calls."""
-    _cs.depth += 1
+    _get_connect_state().depth += 1
 
 
 def end_deferred_start() -> None:
     """End deferring. Flush pending starts if outermost."""
-    _cs.depth -= 1
-    if _cs.depth == 0:
-        pending = _cs.pending[:]
-        _cs.pending.clear()
+    cs = _get_connect_state()
+    if cs.depth <= 0:
+        raise RuntimeError("end_deferred_start() called without matching begin_deferred_start()")
+    cs.depth -= 1
+    if cs.depth == 0:
+        pending = cs.pending[:]
+        cs.pending.clear()
         for start in pending:
             start()
 
 
 def defer_start(start: Callable[[], None]) -> None:
     """Defer or immediately run a producer start."""
-    if _cs.depth > 0:
-        _cs.pending.append(start)
+    cs = _get_connect_state()
+    if cs.depth > 0:
+        cs.pending.append(start)
     else:
         start()

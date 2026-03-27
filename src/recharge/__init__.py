@@ -14,6 +14,7 @@ from .core import (
     Subscription,
     Talkback,
     batch,
+    configure,
     derived,
     derived_from,
     dynamic_derived,
@@ -60,6 +61,7 @@ __all__ = [
     # Composition
     "pipe",
     "batch",
+    "configure",
     "subscribe",
     # Utilities
     "is_lifecycle_signal",

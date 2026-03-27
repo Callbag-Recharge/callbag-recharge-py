@@ -5,11 +5,12 @@ from __future__ import annotations
 import gc
 import sys
 import threading
+import weakref
 from typing import TYPE_CHECKING
 
 import pytest
 
-from recharge import derived, dynamic_derived, effect, state
+from recharge import configure, derived, dynamic_derived, effect, state
 from recharge.core.subgraph_locks import (
     _REGISTRY,
     acquire_subgraph_write_lock_with_defer,
@@ -316,6 +317,254 @@ def test_defer_set_immediate_when_no_lock() -> None:
     s = state(0)
     defer_set(s, 99)
     assert s.get() == 99
+
+
+def test_lock_box_indirection_after_union() -> None:
+    """After union(), both subgraphs serialize via the same underlying lock.
+
+    Verifies fix #4: lock-box indirection. When two subgraphs merge via
+    derived(), the _LockBox for the subsumed root is redirected to the
+    canonical root's RLock. Any thread that captured a box reference before
+    the union must still acquire the correct merged lock.
+    """
+    a = state(0)
+    b = state(0)
+
+    # Capture lock boxes *before* they get merged by derived().
+    with _REGISTRY._meta_lock:
+        id_a = id(a)
+        id_b = id(b)
+        root_a = _REGISTRY._find_locked(id_a)
+        root_b = _REGISTRY._find_locked(id_b)
+        box_a = _REGISTRY._boxes[root_a]
+        box_b = _REGISTRY._boxes[root_b]
+        # Before union: independent locks.
+        assert box_a.lock is not box_b.lock
+
+    # Merge subgraphs via derived that depends on both.
+    merged = derived([a, b], lambda: a.get() + b.get())
+    dispose = effect([merged], lambda: None)
+
+    # After union: both boxes should point to the same underlying RLock.
+    assert box_a.lock is box_b.lock or box_b.lock is box_a.lock
+
+    # Verify serialization works: concurrent writes must not interleave.
+    gate = threading.Event()
+    entered = threading.Event()
+    order: list[str] = []
+
+    def slow_effect_a() -> int:
+        val = a.get()
+        if val > 0:
+            order.append("a_enter")
+            entered.set()
+            gate.wait(timeout=2.0)
+            order.append("a_exit")
+        return val
+
+    da = derived([a], slow_effect_a)
+    hold = effect([da], lambda: None)
+
+    b_done = threading.Event()
+
+    def write_a() -> None:
+        a.set(1)
+
+    def write_b() -> None:
+        entered.wait(timeout=2.0)
+        b.set(1)
+        order.append("b_done")
+        b_done.set()
+
+    t1 = threading.Thread(target=write_a)
+    t2 = threading.Thread(target=write_b)
+    t1.start()
+    t2.start()
+
+    assert entered.wait(timeout=2.0), "write_a did not enter slow section"
+    # b should be blocked because same subgraph lock.
+    assert not b_done.wait(timeout=0.3), "write_b completed while write_a held the lock"
+    gate.set()
+
+    t1.join(timeout=2.0)
+    t2.join(timeout=2.0)
+    assert not t1.is_alive()
+    assert not t2.is_alive()
+    # a must complete before b can proceed.
+    assert order.index("a_exit") < order.index("b_done")
+    hold()
+    dispose()
+
+
+def test_connect_state_is_thread_isolated() -> None:
+    """Each thread has its own _ConnectState — concurrent graph construction
+    on independent subgraphs doesn't interfere.
+
+    Verifies fix #5: _ConnectState uses threading.local().
+    """
+    from recharge.core.protocol import (
+        _get_connect_state,
+        begin_deferred_start,
+        end_deferred_start,
+    )
+
+    results: dict[str, list[int]] = {"main": [], "worker": []}
+    barrier = threading.Barrier(2)
+
+    def worker() -> None:
+        # Worker should start with depth=0, independent of main thread.
+        results["worker"].append(_get_connect_state().depth)
+        barrier.wait(timeout=2.0)
+        # Main thread is at depth=1, but worker should still be 0.
+        results["worker"].append(_get_connect_state().depth)
+        begin_deferred_start()
+        results["worker"].append(_get_connect_state().depth)
+        end_deferred_start()
+        results["worker"].append(_get_connect_state().depth)
+
+    begin_deferred_start()
+    results["main"].append(_get_connect_state().depth)  # Should be 1
+    t = threading.Thread(target=worker)
+    t.start()
+    barrier.wait(timeout=2.0)
+    results["main"].append(_get_connect_state().depth)  # Still 1
+    end_deferred_start()
+    results["main"].append(_get_connect_state().depth)  # Back to 0
+    t.join(timeout=2.0)
+
+    assert results["main"] == [1, 1, 0], f"main thread connect state: {results['main']}"
+    assert results["worker"] == [0, 0, 1, 0], f"worker thread connect state: {results['worker']}"
+
+
+def test_end_deferred_start_raises_on_underflow() -> None:
+    """Mismatched end_deferred_start() fails fast instead of corrupting state."""
+    from recharge.core.protocol import end_deferred_start
+
+    with pytest.raises(RuntimeError, match="without matching begin_deferred_start"):
+        end_deferred_start()
+
+
+def test_deferred_flush_runs_all_callbacks_before_raising() -> None:
+    """Deferred queue keeps flushing even if one callback raises."""
+    s = state(0)
+
+    class _RaisingTarget:
+        __slots__ = ()
+
+        def set(self, _value: int) -> None:
+            raise ValueError("boom")
+
+    with pytest.raises(ValueError, match="boom"), acquire_subgraph_write_lock_with_defer(s):
+        defer_set(_RaisingTarget(), 1)
+        defer_set(s, 99)
+
+    # Second callback should still run despite first error.
+    assert s.get() == 99
+
+
+def test_deferred_flush_mode_safe_propagates_keyboard_interrupt_immediately() -> None:
+    """safe mode should not swallow KeyboardInterrupt during deferred flush."""
+    s = state(0)
+    configure(deferred_flush_mode="safe")
+
+    class _KeyboardInterruptTarget:
+        __slots__ = ()
+
+        def set(self, _value: int) -> None:
+            raise KeyboardInterrupt()
+
+    try:
+        with pytest.raises(KeyboardInterrupt), acquire_subgraph_write_lock_with_defer(s):
+            defer_set(_KeyboardInterruptTarget(), 1)
+            defer_set(s, 123)
+        # Queue stops at KeyboardInterrupt in safe mode.
+        assert s.get() == 0
+    finally:
+        configure(deferred_flush_mode="safe")
+
+
+def test_deferred_flush_mode_strict_drains_before_reraising() -> None:
+    """strict mode should drain all deferred callbacks, then re-raise."""
+    s = state(0)
+    configure(deferred_flush_mode="strict")
+
+    class _KeyboardInterruptTarget:
+        __slots__ = ()
+
+        def set(self, _value: int) -> None:
+            raise KeyboardInterrupt()
+
+    try:
+        with pytest.raises(KeyboardInterrupt), acquire_subgraph_write_lock_with_defer(s):
+            defer_set(_KeyboardInterruptTarget(), 1)
+            defer_set(s, 456)
+        # strict mode drains queue fully before re-raising.
+        assert s.get() == 456
+    finally:
+        configure(deferred_flush_mode="safe")
+
+
+def test_registry_preserves_lock_identity_when_root_is_gced() -> None:
+    """GC of root node should not split lock identity for surviving members."""
+
+    class _Node:
+        __slots__ = ("__weakref__",)
+
+    a = _Node()
+    b = _Node()
+    c = _Node()
+
+    _REGISTRY.ensure_node(a)
+    _REGISTRY.ensure_node(b)
+    _REGISTRY.ensure_node(c)
+    _REGISTRY.union(a, b)
+    _REGISTRY.union(a, c)
+
+    with _REGISTRY._meta_lock:
+        root_a = _REGISTRY._find_locked(id(a))
+        root_b = _REGISTRY._find_locked(id(b))
+        root_c = _REGISTRY._find_locked(id(c))
+        assert root_a == root_b == root_c
+        original_lock = _REGISTRY._boxes[root_a].lock
+
+    # Drop the object that currently represents the root id.
+    del a
+    gc.collect()
+
+    with _REGISTRY._meta_lock:
+        new_root_b = _REGISTRY._find_locked(id(b))
+        new_root_c = _REGISTRY._find_locked(id(c))
+        assert new_root_b == new_root_c
+        assert _REGISTRY._boxes[new_root_b].lock is original_lock
+
+
+def test_registry_ignores_stale_gc_callback_reference() -> None:
+    """Stale weakref callbacks must not clear a newer slot on same node id."""
+
+    class _Node:
+        __slots__ = ("__weakref__",)
+
+    n = _Node()
+    _REGISTRY.ensure_node(n)
+
+    node_id = id(n)
+    with _REGISTRY._meta_lock:
+        ref_new = _REGISTRY._refs[node_id]
+        stale = weakref.ref(_Node())
+        assert _REGISTRY._parent.get(node_id) == node_id
+
+        _REGISTRY._on_gc(node_id, stale)
+        # Wrong callback identity should be ignored.
+        assert _REGISTRY._refs.get(node_id) is ref_new
+        assert node_id in _REGISTRY._parent
+
+
+def test_deferred_depth_underflow_raises() -> None:
+    """Deferred-depth accounting fails fast on mismatched decrement."""
+    from recharge.core.subgraph_locks import _dec_deferred_depth
+
+    with pytest.raises(RuntimeError, match="underflow"):
+        _dec_deferred_depth()
 
 
 def test_dynamic_derived_rejects_undeclared_dep() -> None:

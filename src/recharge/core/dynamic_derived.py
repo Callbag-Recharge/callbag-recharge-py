@@ -458,9 +458,7 @@ class DynamicDerivedImpl:
         return op(self)
 
 
-def dynamic_derived(
-    possible_deps: list[Any], fn: Any, *, equals: Any = None
-) -> DynamicDerivedImpl:
+def dynamic_derived(possible_deps: list[Any], fn: Any, *, equals: Any = None) -> DynamicDerivedImpl:
     """Create a computed store with dynamic dependency tracking.
 
     ``possible_deps`` declares the exhaustive superset of stores that ``fn``
