@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from .protocol import DATA, END, STATE, NodeStatus, Signal
+from .subgraph_locks import ensure_registered, union_nodes
 from .types import NOOP_TALKBACK, _CallbackSink, _NodeTalkback
 
 
@@ -54,6 +55,7 @@ class OperatorImpl:
         "_reset_on_teardown",
         "_resubscribable",
         "_status",
+        "__weakref__",
     )
 
     def __init__(
@@ -81,6 +83,9 @@ class OperatorImpl:
         self._reset_on_teardown = reset_on_teardown
         self._resubscribable = resubscribable
         self._status = NodeStatus.DISCONNECTED
+        ensure_registered(self)
+        for dep in deps:
+            union_nodes(self, dep)
 
     # --- Output slot ---
 

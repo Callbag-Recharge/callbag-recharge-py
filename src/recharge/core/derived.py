@@ -16,6 +16,7 @@ from .protocol import (
     begin_deferred_start,
     end_deferred_start,
 )
+from .subgraph_locks import ensure_registered, union_nodes
 from .types import NOOP_TALKBACK, _CallbackSink, _NodeTalkback
 
 
@@ -36,6 +37,7 @@ class DerivedImpl:
         "_has_cached",
         "_any_data",
         "_status",
+        "__weakref__",
     )
 
     def __init__(
@@ -58,6 +60,9 @@ class DerivedImpl:
         self._has_cached = False
         self._any_data = False
         self._status = NodeStatus.DISCONNECTED
+        ensure_registered(self)
+        for dep in deps:
+            union_nodes(self, dep)
 
     # --- Output slot management ---
 

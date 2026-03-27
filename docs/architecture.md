@@ -229,6 +229,31 @@ summary   = derived(lambda: f"{embedding.get()} {sentiment.get()} {keywords.get(
 | Parallel derived computation | Sequential (GIL) | True parallelism |
 | Graph construction | Not thread-safe (do at startup) | Not thread-safe (do at startup) |
 
+### Write safety scope
+
+Only `state.set()` is protected by the per-subgraph write lock. `producer.emit()` and lifecycle signal pushes are **not** covered — callers must synchronize externally if using these from multiple threads.
+
+### Cross-subgraph writes
+
+An effect in subgraph A that calls `state.set()` on a state in subgraph B risks deadlock if another thread does the reverse (classic lock-ordering deadlock). Use `defer_set(target, value)` to queue cross-subgraph writes for execution after the current subgraph lock is released:
+
+```python
+from recharge.core import defer_set
+
+# Inside an effect that holds subgraph A's lock:
+defer_set(b_state, new_value)  # Executes after A's lock releases
+```
+
+Same-subgraph nested `set()` calls are safe — `RLock` handles re-entrancy.
+
+### Batch thread isolation
+
+Each thread has its own batch context (`batch()` state is thread-local). Batches do not span threads. Deferred emissions re-acquire the subgraph write lock during drain to maintain atomicity.
+
+### Registry GC safety
+
+The subgraph registry uses weak references to nodes. When a node is garbage collected, its registry entry is automatically cleaned up, preventing `id()` reuse collisions and unbounded registry growth.
+
 ### Async runner (system boundaries only)
 
 ```python

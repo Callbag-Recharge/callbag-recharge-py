@@ -188,7 +188,7 @@ def test_dynamic_derived_basic():
     flag = state(True)
     a = state(1)
     b = state(2)
-    d = dynamic_derived(lambda get: get(a) if get(flag) else get(b))
+    d = dynamic_derived([flag, a, b], lambda get: get(a) if get(flag) else get(b))
     assert d.get() == 1
     flag.set(False)
     assert d.get() == 2
@@ -199,7 +199,7 @@ def test_dynamic_derived_rewire():
     flag = state(True)
     a = state(10)
     b = state(20)
-    d = dynamic_derived(lambda get: get(a) if get(flag) else get(b))
+    d = dynamic_derived([flag, a, b], lambda get: get(a) if get(flag) else get(b))
     log: list[int] = []
     sub = subscribe(d, lambda v, _: log.append(v))
     assert d.get() == 10
@@ -597,7 +597,7 @@ def test_derived_get_after_reset():
 def test_dynamic_derived_get_after_reset():
     """dynamic_derived.get() should pull-compute fresh value after RESET."""
     a = state(10)
-    dd = dynamic_derived(lambda get: get(a) * 3)
+    dd = dynamic_derived([a], lambda get: get(a) * 3)
     log: list[int] = []
     dispose = effect([dd], lambda: log.append(dd.get()))
     assert dd.get() == 30
@@ -700,7 +700,7 @@ def test_dynamic_derived_rewire_signal_queue():
         else:
             return get(b)
 
-    dd = dynamic_derived(compute)
+    dd = dynamic_derived([flag, a, b], compute)
     log: list = []
     sub = subscribe(dd, lambda v, _: log.append(v))
     assert dd.get() == 1

@@ -15,6 +15,7 @@ from .protocol import (
     end_deferred_start,
     is_lifecycle_signal,
 )
+from .subgraph_locks import union_nodes
 from .types import _CallbackSink
 
 
@@ -30,6 +31,7 @@ class _EffectState:
         "generation",
         "sink_gens",
         "fn",
+        "__weakref__",
     )
 
     def __init__(self, fn: Any) -> None:
@@ -102,6 +104,8 @@ def effect(
     Call ``dispose.signal(sig)`` for lifecycle control (RESET, TEARDOWN, etc.).
     """
     es = _EffectState(fn)
+    for dep in deps:
+        union_nodes(es, dep)
 
     begin_deferred_start()
     es.run()

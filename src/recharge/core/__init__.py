@@ -17,6 +17,7 @@ from .protocol import (
     is_lifecycle_signal,
 )
 from .state import StateImpl, state
+from .subgraph_locks import defer_set
 from .subscribe import subscribe
 from .types import (
     NOOP_TALKBACK,
@@ -56,6 +57,7 @@ __all__ = [
     "batch",
     "subscribe",
     # Utilities
+    "defer_set",
     "is_lifecycle_signal",
     "Bitmask",
     "NOOP_TALKBACK",

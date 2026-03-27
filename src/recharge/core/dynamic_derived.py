@@ -16,6 +16,7 @@ from .protocol import (
     begin_deferred_start,
     end_deferred_start,
 )
+from .subgraph_locks import ensure_registered, union_nodes
 from .types import NOOP_TALKBACK, _CallbackSink, _NodeTalkback
 
 
@@ -28,6 +29,7 @@ class DynamicDerivedImpl:
         "_upstream_talkbacks",
         "_cached_value",
         "_deps",
+        "_possible_deps",
         "_tracking_fn",
         "_eq_fn",
         "_dirty_deps",
@@ -41,9 +43,11 @@ class DynamicDerivedImpl:
         "_status",
         "_tracked_deps",
         "_tracking_set",
+        "__weakref__",
     )
 
-    def __init__(self, fn: Any, *, equals: Any = None) -> None:
+    def __init__(self, possible_deps: list[Any], fn: Any, *, equals: Any = None) -> None:
+        self._possible_deps: frozenset[Any] = frozenset(possible_deps)
         self._tracking_fn = fn
         self._eq_fn = equals
         self._output: Any = None
@@ -62,6 +66,9 @@ class DynamicDerivedImpl:
         self._status = NodeStatus.DISCONNECTED
         self._tracked_deps: list[Any] = []
         self._tracking_set: set[Any] | None = None
+        ensure_registered(self)
+        for dep in possible_deps:
+            union_nodes(self, dep)
 
     # --- Output slot ---
 
@@ -116,6 +123,11 @@ class DynamicDerivedImpl:
 
     def _track_get(self, store: Any) -> Any:
         assert self._tracking_set is not None
+        if store not in self._possible_deps:
+            raise ValueError(
+                f"Store {store!r} not in declared possible_deps. "
+                f"All stores accessed via get() must be declared upfront."
+            )
         if store not in self._tracking_set:
             self._tracking_set.add(store)
             self._tracked_deps.append(store)
@@ -152,6 +164,7 @@ class DynamicDerivedImpl:
     def _maybe_rewire(self) -> None:
         new_deps = self._tracked_deps
         old_deps = self._deps
+        # Subgraph unions already done at construction via possible_deps.
         # Fast path: same deps in same order
         if len(new_deps) == len(old_deps):
             same = True
@@ -163,28 +176,14 @@ class DynamicDerivedImpl:
                 return
         self._rewiring = True
         self._rewire_queue = []
-        old_set = set(id(d) for d in old_deps)
-        new_set = set(id(d) for d in new_deps)
-        # Disconnect removed deps
-        for i, dep in enumerate(old_deps):
-            if id(dep) not in new_set and i < len(self._upstream_talkbacks):
-                self._upstream_talkbacks[i].stop()
-        # Build new talkback array
-        old_id_to_idx = {id(d): i for i, d in enumerate(old_deps)}
-        new_talkbacks: list[Any] = []
-        for dep in new_deps:
-            old_idx = old_id_to_idx.get(id(dep))
-            if old_idx is not None and old_idx < len(self._upstream_talkbacks):
-                new_talkbacks.append(self._upstream_talkbacks[old_idx])
-            else:
-                new_talkbacks.append(None)
+        for tb in self._upstream_talkbacks:
+            if tb is not None:
+                tb.stop()
         self._deps = new_deps
-        self._upstream_talkbacks = new_talkbacks
+        self._upstream_talkbacks = [None] * len(new_deps)
         self._dirty_deps = Bitmask()
-        # Connect new deps
-        for i, dep in enumerate(new_deps):
-            if id(dep) not in old_set:
-                self._connect_one_dep(i)
+        for i in range(len(new_deps)):
+            self._connect_one_dep(i)
         self._rewiring = False
         # Replay any signals queued during rewire
         queued = self._rewire_queue
@@ -216,6 +215,7 @@ class DynamicDerivedImpl:
         self._has_cached = True
         self._status = NodeStatus.SETTLED
         self._deps = self._tracked_deps
+        # Subgraph unions already done at construction via possible_deps.
         self._dirty_deps = Bitmask()
         begin_deferred_start()
         self._connect_upstream()
@@ -458,12 +458,18 @@ class DynamicDerivedImpl:
         return op(self)
 
 
-def dynamic_derived(fn: Any, *, equals: Any = None) -> DynamicDerivedImpl:
+def dynamic_derived(
+    possible_deps: list[Any], fn: Any, *, equals: Any = None
+) -> DynamicDerivedImpl:
     """Create a computed store with dynamic dependency tracking.
 
-    ``fn`` receives a tracking ``get`` function. Call ``get(store)`` to read
-    a store's value and register it as a dependency. Dependencies are
-    re-tracked on each recomputation and upstream connections are rewired
-    when deps change.
+    ``possible_deps`` declares the exhaustive superset of stores that ``fn``
+    might read. Subgraph unions are performed at construction time for all
+    declared deps. At runtime, ``fn`` receives a tracking ``get`` function —
+    call ``get(store)`` to read a store's value and subscribe to it.
+    Accessing a store not in ``possible_deps`` raises ``ValueError``.
+
+    Dependencies are re-tracked on each recomputation and upstream
+    connections are rewired when the active subset of deps changes.
     """
-    return DynamicDerivedImpl(fn, equals=equals)
+    return DynamicDerivedImpl(possible_deps, fn, equals=equals)

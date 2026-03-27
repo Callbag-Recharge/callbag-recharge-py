@@ -176,3 +176,41 @@ if self._connected:
 | Batch drain per-emission try/catch | ✅ Fixed | Per-emission try/catch in `protocol.py` |
 | Deferred emission P_PENDING guard | ✅ Fixed | `_flush_pending` checks `_pending` |
 | Derived get() cache after RESET | ✅ Fixed | `get()` checks `_has_cached` when connected |
+
+---
+
+## 6. Per-subgraph write lock follow-ups (QA defer list)
+
+These were identified during `/qa` review of Phase 2.2 (per-subgraph write locks). All items have
+been addressed in the concurrency hardening pass.
+
+1. **Registry identity model (`id(node)`)** — ✅ Fixed
+   Registry now uses `weakref.ref` with GC finalizer callbacks. Entries auto-clean when nodes are
+   garbage collected, preventing `id()` reuse collisions and unbounded growth.
+
+2. **Union atomicity with in-flight lock holders** — ✅ Fixed
+   `dynamic_derived` now takes explicit `possible_deps` — all unions happen at construction time.
+   No runtime unions under contention.
+
+3. **Cross-subgraph nested-set deadlock risk** — ✅ Fixed
+   `defer_set(target, value)` utility queues cross-subgraph writes for execution after the current
+   subgraph lock is released. `state.set()` uses `acquire_subgraph_write_lock_with_defer` which
+   flushes deferred sets on outermost lock exit.
+
+4. **Batch lock/flush atomicity gap** — ✅ Fixed
+   Batch state is now thread-local. Drain loop re-acquires the subgraph write lock per deferred
+   emission, closing the atomicity gap between `set()` and DATA flush.
+
+5. **Dynamic rewire + union under contention** — ✅ Fixed
+   `dynamic_derived(possible_deps, fn)` declares all possible deps upfront. `union_nodes()` is
+   called only at construction. Runtime rewiring only changes active subscriptions within the
+   pre-established subgraph — no topology mutations under contention.
+
+6. **Concurrency contract scope is underspecified** — ✅ Documented
+   Architecture docs (§4) now specify: only `state.set()` is write-safe. `producer.emit()` requires
+   external synchronization. Cross-subgraph writes use `defer_set()`. Batch contexts are thread-local.
+
+7. **`dynamic_derived` concurrent `get()` semantics** — ✅ Documented
+   `dynamic_derived.get()` on a connected node with valid cache is a simple value return (safe).
+   Pull-compute on disconnected nodes mutates tracking state and is not thread-safe — same as
+   all graph construction (documented: "do at startup").

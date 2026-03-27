@@ -82,7 +82,7 @@
 
 ### 2.1 — Thread-safe reads
 - [x] Lock-free `get()` — atomic reference reads
-- [ ] Validate on GIL and free-threaded (3.13t/3.14t) builds
+- [x] Validate on GIL and free-threaded (3.13t/3.14t) builds
 - [x] Basic concurrent-read stress tests added (`tests/test_concurrency.py`)
 - [ ] Deferred: protocol-level concurrency validation under contention
   - [ ] Signal sequencing checks (DIRTY→DATA / DIRTY→RESOLVED) during concurrent reads/writes
@@ -128,16 +128,32 @@
 
 ## Phase 4: AI & ecosystem
 
+> **Competitive context (March 2026):** OpenViking (Volcengine/ByteDance, 19K+ stars) is the
+> primary Python-ecosystem competitor for agentic memory. Pull-based with subprocess IPC.
+> Our differentiator: reactive/push-based, in-process, diamond-safe, O(1) cached context
+> assembly via `derived()`. See `src/archive/docs/SESSION-agentic-memory-research.md`.
+
 ### 4.1 — memory/ layer
 - [ ] `collection` — reactive document collection with TTL/decay
-- [ ] `vector_index` — embedding-based similarity search
-- [ ] `knowledge_graph` — reactive node/edge graph
+- [ ] `decay` — scoring formula: `sigmoid(log1p(access_count)) * exp_decay(age, half_life)` with configurable half-life (default 7d). Validated by OpenViking. Blendable with semantic similarity.
+- [ ] `node` — atomic memory unit with metadata, category, access tracking
+- [ ] `vector_index` — HNSW similarity search. Pure Python first, numpy/BLAS acceleration for distance hot path
+- [ ] `knowledge_graph` — reactive node/edge graph with typed relations
+- [ ] `light_collection` — FIFO/LRU eviction variant (no reactive scoring overhead)
+- [ ] `admission_policy` — gate every `add()` with admit/reject/update/merge. Vector pre-filter + LLM dedup (skip/create/merge/delete) as composable policy
+- [ ] `forget_policy` — quality predicate pruning on admission and explicit `gc()`
+- [ ] Typed memory categories — optional `category` field (profile/preferences/entities/events/cases/patterns or custom). Policy-driven routing for retrieval weighting, dedup boundaries, consolidation targeting
+- [ ] Progressive context loading (L0/L1/L2) — three-tier summaries per memory: L0 (~100 tokens, vector search), L1 (~2K tokens, rerank/context), L2 (full, on-demand). Generated via `from_llm`. `derived()` chains for bottom-up aggregation
 
 ### 4.2 — ai/ layer (the selling point)
 - [ ] `chat_stream` — streaming LLM responses as reactive source
 - [ ] `rag_pipeline` — retrieve → augment → generate pipeline
 - [ ] `from_llm` — wrap any LLM API as a source
 - [ ] `agent_loop` — reactive agent with tool calling
+- [ ] `agent_memory` — Mem0-equivalent reactive agentic memory. LLM extraction + embedding via job queue (retry, stall detection). Scoped isolation (user/agent tags). Retrieval observability: search returns trace (query plan, candidate scores, decay/similarity breakdown, "why this memory surfaced")
+- [ ] `system_prompt_builder` — reactive multi-section prompt assembly with per-section/total token budgets
+- [ ] Two-phase session commit — sync archive + async extraction with reactive status stores
+- [ ] Explicit memory tool API — `search/read/browse/commit` for agent surfaces and MCP integration
 
 ### 4.3 — compat/ layer
 - [ ] FastAPI integration (reactive endpoints)

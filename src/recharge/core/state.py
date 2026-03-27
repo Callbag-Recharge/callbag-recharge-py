@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from .producer import ProducerImpl
 from .protocol import NodeStatus, Signal, defer_emission, is_batching
+from .subgraph_locks import acquire_subgraph_write_lock_with_defer, ensure_registered
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -29,6 +30,7 @@ class StateImpl(ProducerImpl):
             auto_dirty=True,
             equals=equals if equals is not None else op.is_,
         )
+        ensure_registered(self)
 
     def get(self) -> Any:
         return self._value
@@ -38,24 +40,25 @@ class StateImpl(ProducerImpl):
 
         Fast path: inlines ProducerImpl.emit() to skip method call overhead.
         """
-        if self._completed:
-            return
-        if self._eq_fn is not None and self._eq_fn(self._value, value):
-            return
-        self._value = value
-        if self._output is None:
-            return
-        if is_batching():
-            if not self._pending:
-                self._pending = True
+        with acquire_subgraph_write_lock_with_defer(self):
+            if self._completed:
+                return
+            if self._eq_fn is not None and self._eq_fn(self._value, value):
+                return
+            self._value = value
+            if self._output is None:
+                return
+            if is_batching():
+                if not self._pending:
+                    self._pending = True
+                    self._status = NodeStatus.DIRTY
+                    self._dispatch_signal(Signal.DIRTY)
+                    defer_emission(self, self._flush_pending)
+            else:
                 self._status = NodeStatus.DIRTY
                 self._dispatch_signal(Signal.DIRTY)
-                defer_emission(self._flush_pending)
-        else:
-            self._status = NodeStatus.DIRTY
-            self._dispatch_signal(Signal.DIRTY)
-            self._status = NodeStatus.SETTLED
-            self._dispatch_next(self._value)
+                self._status = NodeStatus.SETTLED
+                self._dispatch_next(self._value)
 
     def update(self, fn: Callable[[Any], Any]) -> None:
         """Update the value using a function of the current value."""

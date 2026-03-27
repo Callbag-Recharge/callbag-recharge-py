@@ -15,6 +15,7 @@ from .protocol import (
     defer_start,
     is_batching,
 )
+from .subgraph_locks import ensure_registered
 from .types import NOOP_TALKBACK, _NodeTalkback
 
 if TYPE_CHECKING:
@@ -43,6 +44,7 @@ class ProducerImpl:
         "_getter_fn",
         "_initial",
         "_on_lifecycle_handler",
+        "__weakref__",
     )
 
     def __init__(
@@ -72,6 +74,7 @@ class ProducerImpl:
         self._getter_fn = getter
         self._initial = initial
         self._on_lifecycle_handler: Callable[[Signal], None] | None = None
+        ensure_registered(self)
 
     def get(self) -> Any:
         if self._getter_fn is not None:
@@ -148,7 +151,7 @@ class ProducerImpl:
                 if self._auto_dirty:
                     self._status = NodeStatus.DIRTY
                     self._dispatch_signal(Signal.DIRTY)
-                defer_emission(self._flush_pending)
+                defer_emission(self, self._flush_pending)
         else:
             if self._auto_dirty:
                 self._status = NodeStatus.DIRTY

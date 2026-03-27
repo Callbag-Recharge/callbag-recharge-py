@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from contextlib import contextmanager
 from enum import Enum, auto
 from typing import TYPE_CHECKING
@@ -43,7 +44,11 @@ STATE = 3
 
 # ---------------------------------------------------------------------------
 # Batch — defers DATA emissions; DIRTY propagates immediately
+#
+# Each thread has its own batch state so concurrent batches are isolated.
 # ---------------------------------------------------------------------------
+
+_batch_tls = threading.local()
 
 
 class _BatchState:
@@ -52,10 +57,15 @@ class _BatchState:
     def __init__(self) -> None:
         self.depth = 0
         self.draining = False
-        self.emissions: list[Callable[[], None]] = []
+        self.emissions: list[tuple[object, Callable[[], None]]] = []
 
 
-_bs = _BatchState()
+def _get_batch_state() -> _BatchState:
+    bs: _BatchState | None = getattr(_batch_tls, "state", None)
+    if bs is None:
+        bs = _BatchState()
+        _batch_tls.state = bs
+    return bs
 
 
 @contextmanager
@@ -64,39 +74,51 @@ def batch() -> Generator[None]:
 
     DIRTY signals propagate immediately so the graph knows what changed.
     Multiple set() calls within a batch coalesce — downstream sees one update.
+
+    Each thread has its own batch context — batches do not span threads.
     """
-    _bs.depth += 1
+    # Import here to avoid circular import at module level.
+    from .subgraph_locks import acquire_subgraph_write_lock
+
+    bs = _get_batch_state()
+    bs.depth += 1
     try:
         yield
     finally:
-        _bs.depth -= 1
-        if _bs.depth == 0 and not _bs.draining:
-            _bs.draining = True
+        bs.depth -= 1
+        if bs.depth == 0 and not bs.draining:
+            bs.draining = True
             first_error: Exception | None = None
             try:
                 i = 0
-                while i < len(_bs.emissions):
+                while i < len(bs.emissions):
+                    node, fn = bs.emissions[i]
                     try:
-                        _bs.emissions[i]()
+                        with acquire_subgraph_write_lock(node):
+                            fn()
                     except Exception as e:
                         if first_error is None:
                             first_error = e
                     i += 1
             finally:
-                _bs.emissions.clear()
-                _bs.draining = False
+                bs.emissions.clear()
+                bs.draining = False
             if first_error is not None:
                 raise first_error
 
 
 def is_batching() -> bool:
-    """Returns True if currently inside a batch context."""
-    return _bs.depth > 0
+    """Returns True if currently inside a batch context on this thread."""
+    return _get_batch_state().depth > 0
 
 
-def defer_emission(fn: Callable[[], None]) -> None:
-    """Queue a DATA emission for deferred dispatch at batch exit."""
-    _bs.emissions.append(fn)
+def defer_emission(node: object, fn: Callable[[], None]) -> None:
+    """Queue a DATA emission for deferred dispatch at batch exit.
+
+    *node* identifies which subgraph the emission belongs to so the drain
+    loop can re-acquire the correct write lock.
+    """
+    _get_batch_state().emissions.append((node, fn))
 
 
 # ---------------------------------------------------------------------------
