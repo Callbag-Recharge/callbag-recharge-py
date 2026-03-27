@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 from recharge import Signal
@@ -12,11 +13,16 @@ class Observation:
     """Collects DATA values, STATE signals, and END events from a store.
 
     Returned by ``observe()``. See docs/test-guidance.md for the full API.
+
+    Thread-safe: all list mutations are protected by an internal lock so that
+    ``Observation`` works correctly under free-threaded Python (3.13t/3.14t)
+    where list.append is not atomic.
     """
 
     __slots__ = (
         "_store",
         "_sub",
+        "_lock",
         "values",
         "signals",
         "events",
@@ -28,6 +34,7 @@ class Observation:
 
     def __init__(self, store: Any) -> None:
         self._store = store
+        self._lock = threading.Lock()
         self.values: list[Any] = []
         self.signals: list[Signal] = []
         self.events: list[tuple[str, Any]] = []
@@ -40,29 +47,33 @@ class Observation:
 
     def _connect(self) -> None:
         def on_next(value: Any) -> None:
-            if self.ended:
-                return
-            self.values.append(value)
-            self.events.append(("DATA", value))
+            with self._lock:
+                if self.ended:
+                    return
+                self.values.append(value)
+                self.events.append(("DATA", value))
 
         def on_signal(sig: Signal) -> None:
-            if self.ended:
-                return
-            self.signals.append(sig)
-            self.events.append(("SIGNAL", sig))
-            if sig is Signal.DIRTY:
-                self.dirty_count += 1
-            elif sig is Signal.RESOLVED:
-                self.resolved_count += 1
+            with self._lock:
+                if self.ended:
+                    return
+                self.signals.append(sig)
+                self.events.append(("SIGNAL", sig))
+                if sig is Signal.DIRTY:
+                    self.dirty_count += 1
+                elif sig is Signal.RESOLVED:
+                    self.resolved_count += 1
 
         def on_complete() -> None:
-            self.ended = True
-            self.events.append(("END", None))
+            with self._lock:
+                self.ended = True
+                self.events.append(("END", None))
 
         def on_error(err: Exception) -> None:
-            self.ended = True
-            self.end_error = err
-            self.events.append(("END", err))
+            with self._lock:
+                self.ended = True
+                self.end_error = err
+                self.events.append(("END", err))
 
         sink = _CallbackSink(on_next, on_signal, on_complete, on_error)
         self._sub = self._store.subscribe(sink)

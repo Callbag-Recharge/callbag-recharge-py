@@ -4,9 +4,7 @@ take_while, distinct_until_changed, merge, combine, zip, share, replay.
 
 from __future__ import annotations
 
-from .conftest import observe
-
-from recharge import Signal, derived, effect, operator, pipe, producer, state, subscribe
+from recharge import derived, effect, pipe, producer, state
 from recharge.core.protocol import batch
 from recharge.extra import (
     combine,
@@ -23,6 +21,7 @@ from recharge.extra import (
     zip,
 )
 
+from .conftest import observe
 
 # ── map ──────────────────────────────────────────────────────────────
 

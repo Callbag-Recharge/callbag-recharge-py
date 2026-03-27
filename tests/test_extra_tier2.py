@@ -6,11 +6,10 @@ from __future__ import annotations
 
 import time
 
-from .conftest import observe
-
-from recharge import pipe, producer, state, subscribe
+from recharge import pipe, producer, state
 from recharge.extra import concat_map, debounce, flat_map, sample, switch_map, throttle
 
+from .conftest import observe
 
 # ── debounce ─────────────────────────────────────────────────────────
 

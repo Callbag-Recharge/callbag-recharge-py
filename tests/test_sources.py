@@ -4,14 +4,13 @@ from_awaitable, from_async_iter, from_any."""
 from __future__ import annotations
 
 import asyncio
-import concurrent.futures
 import threading
 import time
 from typing import Any
 
 import pytest
 
-from recharge import Signal, state, subscribe
+from recharge import state
 from recharge.raw import (
     first_value_from,
     from_any,
@@ -23,7 +22,6 @@ from recharge.raw import (
 )
 
 from .conftest import observe
-
 
 # ── raw_subscribe ──────────────────────────────────────────────────────────
 

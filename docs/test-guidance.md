@@ -323,6 +323,42 @@ def test_parallel_derived_computation():
     assert elapsed < 0.09  # less than 2x — proves parallelism
 ```
 
+### Protocol-level validation under contention
+
+Verify that two-phase push (DIRTY→DATA, DIRTY→RESOLVED) and diamond convergence hold under concurrent write pressure. Use `observe()` to collect the event stream, then validate ordering post-join.
+
+```python
+def test_signal_sequencing_under_contention():
+    """DIRTY always precedes DATA even with concurrent writers."""
+    from tests.conftest import observe
+
+    s = state(0)
+    d = derived([s], lambda: s.get() * 2)
+    obs = observe(d)
+
+    def writer(start):
+        for i in range(start, start + 2000):
+            s.set(i)
+
+    threads = [threading.Thread(target=writer, args=(i * 2000,)) for i in range(4)]
+    for t in threads: t.start()
+    for t in threads: t.join(timeout=10.0)
+    stuck = [t.name for t in threads if t.is_alive()]
+    assert not stuck, f"threads did not finish: {stuck}"
+
+    # Every DATA must be immediately preceded by DIRTY
+    for idx, (kind, _) in enumerate(obs.events):
+        if kind == "DATA":
+            assert idx > 0 and obs.events[idx - 1] == ("SIGNAL", Signal.DIRTY)
+    obs.dispose()
+```
+
+Key patterns:
+- **Always check liveness** after `join(timeout=...)`: `assert not [t for t in threads if t.is_alive()]`
+- **Diamond consistency**: for topology A→B, A→C, B+C→D, verify `d = 2*a + const` — a torn read would break this invariant
+- **Lower bound assertions**: `assert compute_count >= 1` prevents vacuously passing tests
+- **Completion/error/teardown**: spin reader threads calling `get()` while the main thread completes/errors/tears down — `get()` must never crash
+
 ---
 
 ## Orchestrate / Pipeline Testing Patterns

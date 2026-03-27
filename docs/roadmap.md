@@ -84,10 +84,10 @@
 - [x] Lock-free `get()` — atomic reference reads
 - [x] Validate on GIL and free-threaded (3.13t/3.14t) builds
 - [x] Basic concurrent-read stress tests added (`tests/test_concurrency.py`)
-- [ ] Deferred: protocol-level concurrency validation under contention
-  - [ ] Signal sequencing checks (DIRTY→DATA / DIRTY→RESOLVED) during concurrent reads/writes
-  - [ ] Diamond convergence race stress under concurrent writes
-  - [ ] Completion/error/teardown propagation under concurrent access
+- [x] Deferred: protocol-level concurrency validation under contention
+  - [x] Signal sequencing checks (DIRTY→DATA / DIRTY→RESOLVED) during concurrent reads/writes
+  - [x] Diamond convergence race stress under concurrent writes
+  - [x] Completion/error/teardown propagation under concurrent access
 
 ### 2.2 — Per-subgraph write locks
 - [x] Union-Find for subgraph detection
@@ -99,7 +99,7 @@
 - [x] `defer_set()` utility for safe cross-subgraph writes from effects
 - [x] `dynamic_derived(possible_deps, fn)` — explicit deps, construction-time unions only
 - [x] Concurrency contract documented (write safety scope, cross-subgraph writes, batch isolation)
-- [ ] Benchmark: independent set() from N threads
+- [x] Benchmark: independent set() from N threads
 
 ### 2.3 — Parallel DATA phase
 - [ ] Depth-grouped computation in DATA phase

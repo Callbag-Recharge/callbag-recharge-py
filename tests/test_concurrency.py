@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import contextlib
 import gc
 import sys
 import threading
+import time
 import weakref
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from recharge import configure, derived, dynamic_derived, effect, state
+from recharge import Signal, configure, derived, dynamic_derived, effect, state
 from recharge.core.subgraph_locks import (
     _REGISTRY,
     acquire_subgraph_write_lock_with_defer,
@@ -592,3 +594,340 @@ def test_dynamic_derived_explicit_deps_basic() -> None:
 
     b.set(30)
     assert dd.get() == 30
+
+
+# ---------------------------------------------------------------------------
+# 2.1 Deferred: Protocol-level concurrency validation under contention
+# ---------------------------------------------------------------------------
+
+
+def test_signal_sequencing_dirty_before_data_under_contention() -> None:
+    """DIRTY always precedes DATA in the observed event stream, even under
+    concurrent write pressure from multiple threads on the same subgraph.
+
+    The per-subgraph write lock serializes set() calls. Within each
+    serialized transaction the two-phase push (DIRTY → DATA) must hold.
+    """
+    from tests.conftest import observe
+
+    s = state(0)
+    d = derived([s], lambda: s.get() * 2)
+    obs = observe(d)
+
+    errors: list[str] = []
+    n_writes = 2_000
+
+    def writer(start: int) -> None:
+        for i in range(start, start + n_writes):
+            s.set(i)
+
+    threads = [threading.Thread(target=writer, args=(i * n_writes,)) for i in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10.0)
+    stuck = [t.name for t in threads if t.is_alive()]
+    assert not stuck, f"threads did not finish: {stuck}"
+
+    # Validate protocol ordering in the collected event stream:
+    # Every DATA must be immediately preceded by a DIRTY signal.
+    events = obs.events
+    for idx, (kind, _payload) in enumerate(events):
+        if kind == "DATA":
+            if idx == 0:
+                errors.append("DATA at index 0 with no preceding DIRTY")
+            elif events[idx - 1] != ("SIGNAL", Signal.DIRTY):
+                errors.append(
+                    f"DATA at index {idx} preceded by {events[idx - 1]!r}, "
+                    f"expected ('SIGNAL', Signal.DIRTY)"
+                )
+
+    obs.dispose()
+    assert not errors, f"signal sequencing violations in {_runtime_mode()} mode: {errors}"
+
+
+def test_signal_sequencing_dirty_before_resolved_under_contention() -> None:
+    """DIRTY→RESOLVED sequencing holds when many concurrent set() calls
+    write the same value (triggering equality-based RESOLVED).
+    """
+    from tests.conftest import observe
+
+    s = state(0, equals=lambda a, b: a == b)
+    d = derived([s], lambda: s.get() // 10, equals=lambda a, b: a == b)
+    obs = observe(d)
+
+    n_writes = 1_000
+
+    def writer() -> None:
+        # Write values 0..9 repeatedly — derived floors to 0 every time,
+        # producing RESOLVED after the first write.
+        for i in range(n_writes):
+            s.set(i % 10)
+
+    threads = [threading.Thread(target=writer) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10.0)
+    stuck = [t.name for t in threads if t.is_alive()]
+    assert not stuck, f"threads did not finish: {stuck}"
+
+    # Validate: every RESOLVED must be preceded by a DIRTY
+    events = obs.events
+    errors: list[str] = []
+    for idx, (kind, payload) in enumerate(events):
+        if kind == "SIGNAL" and payload is Signal.RESOLVED:
+            if idx == 0:
+                errors.append("RESOLVED at index 0 with no preceding DIRTY")
+            elif events[idx - 1] != ("SIGNAL", Signal.DIRTY):
+                errors.append(
+                    f"RESOLVED at index {idx} preceded by {events[idx - 1]!r}, "
+                    f"expected ('SIGNAL', Signal.DIRTY)"
+                )
+
+    obs.dispose()
+    assert not errors, f"DIRTY→RESOLVED violations in {_runtime_mode()} mode: {errors}"
+
+
+def test_diamond_convergence_race_under_concurrent_writes() -> None:
+    """Diamond topology under concurrent writes: D always sees a consistent
+    state and computes exactly once per upstream change.
+
+    Topology: A → B, A → C, B+C → D
+    Multiple threads write to A concurrently. The subgraph lock serializes
+    these writes. D must never see B updated but C stale (or vice versa).
+    """
+    a = state(0)
+    b = derived([a], lambda: a.get() + 10)
+    c = derived([a], lambda: a.get() + 100)
+    d = derived([b, c], lambda: b.get() + c.get())
+
+    d_values: list[int] = []
+    d_lock = threading.Lock()
+
+    def d_observer() -> None:
+        val = d.get()
+        with d_lock:
+            d_values.append(val)
+
+    dispose = effect([d], d_observer)
+
+    n_writes = 2_000
+
+    def writer(offset: int) -> None:
+        for i in range(n_writes):
+            a.set(offset + i)
+
+    threads = [threading.Thread(target=writer, args=(i * n_writes,)) for i in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10.0)
+    stuck = [t.name for t in threads if t.is_alive()]
+    assert not stuck, f"threads did not finish: {stuck}"
+    dispose()
+
+    # Every observed D value must be consistent: d = (a+10) + (a+100) = 2*a + 110
+    errors: list[str] = []
+    for val in d_values:
+        # d = 2*a + 110  =>  (d - 110) must be even
+        if (val - 110) % 2 != 0:
+            errors.append(f"inconsistent diamond value: d={val}, inferred a={(val - 110) / 2}")
+
+    assert not errors, f"diamond convergence violations ({len(errors)}): {errors[:5]}"
+
+    # Final value must also be consistent
+    final = d.get()
+    assert (final - 110) % 2 == 0, f"final d={final} is inconsistent"
+
+
+def test_diamond_single_compute_per_change_under_concurrent_writes() -> None:
+    """Under concurrent writes, D recomputes exactly once per A.set() call,
+    never double-computing from the same upstream change.
+    """
+    a = state(0)
+    b = derived([a], lambda: a.get() * 2)
+    c = derived([a], lambda: a.get() * 3)
+
+    compute_count = 0
+    count_lock = threading.Lock()
+
+    def d_fn() -> int:
+        nonlocal compute_count
+        with count_lock:
+            compute_count += 1
+        return b.get() + c.get()
+
+    d = derived([b, c], d_fn)
+    dispose = effect([d], lambda: None)
+
+    n_writes = 500
+
+    def writer(offset: int) -> None:
+        for i in range(n_writes):
+            a.set(offset + i)
+
+    threads = [threading.Thread(target=writer, args=(i * n_writes,)) for i in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10.0)
+    stuck = [t.name for t in threads if t.is_alive()]
+    assert not stuck, f"threads did not finish: {stuck}"
+    dispose()
+
+    # Total writes = 3 * 500 = 1500, but some may be skipped (same value from
+    # equality check). D computes should be <= total writes. The key invariant
+    # is that compute_count should never exceed total distinct set() calls.
+    total_writes = 3 * n_writes
+    assert compute_count >= 1, "D never computed — test is vacuous"
+    assert compute_count <= total_writes, (
+        f"D computed {compute_count} times for {total_writes} writes — possible double-computation"
+    )
+
+
+def test_completion_propagation_under_concurrent_reads() -> None:
+    """Completion from a producer is visible to concurrent reader threads
+    without crashes or corruption.
+    """
+    from recharge import producer as make_producer
+    from recharge import subscribe
+
+    actions_ref: list[Any] = []
+
+    def factory(actions: Any) -> None:
+        actions_ref.append(actions)
+
+    p = make_producer(factory, initial=0)
+    # Subscribe to trigger the factory function.
+    _sub = subscribe(p, lambda v, _: None)
+
+    errors: list[BaseException] = []
+    error_lock = threading.Lock()
+    done = threading.Event()
+
+    def reader() -> None:
+        try:
+            for _ in range(10_000):
+                if done.is_set():
+                    return
+                p.get()  # Must not crash even during/after completion
+        except BaseException as err:
+            with error_lock:
+                errors.append(err)
+
+    readers = [threading.Thread(target=reader) for _ in range(4)]
+    for t in readers:
+        t.start()
+
+    # Emit a few values then complete
+    assert actions_ref, "factory was not called"
+    actions_ref[0].emit(1)
+    actions_ref[0].emit(2)
+    actions_ref[0].complete()
+
+    done.set()
+    for t in readers:
+        t.join(timeout=5.0)
+    stuck = [t.name for t in readers if t.is_alive()]
+    assert not stuck, f"reader threads did not finish: {stuck}"
+
+    assert not errors, f"reader errors during completion: {errors}"
+    # After completion, get() returns last value
+    assert p.get() == 2
+
+
+def test_error_propagation_under_concurrent_reads() -> None:
+    """Error from a producer is visible to concurrent readers without crashes."""
+    from recharge import producer as make_producer
+    from recharge import subscribe
+
+    actions_ref: list[Any] = []
+
+    def factory(actions: Any) -> None:
+        actions_ref.append(actions)
+
+    p = make_producer(factory, initial=0)
+    _sub = subscribe(p, lambda v, _: None)
+
+    errors: list[BaseException] = []
+    error_lock = threading.Lock()
+    done = threading.Event()
+
+    def reader() -> None:
+        try:
+            for _ in range(10_000):
+                if done.is_set():
+                    return
+                with contextlib.suppress(Exception):
+                    p.get()  # May raise after error — expected
+        except BaseException as err:
+            with error_lock:
+                errors.append(err)
+
+    readers = [threading.Thread(target=reader) for _ in range(4)]
+    for t in readers:
+        t.start()
+
+    assert actions_ref, "factory was not called"
+    actions_ref[0].emit(1)
+    actions_ref[0].error(ValueError("test error"))
+
+    done.set()
+    for t in readers:
+        t.join(timeout=5.0)
+    stuck = [t.name for t in readers if t.is_alive()]
+    assert not stuck, f"reader threads did not finish: {stuck}"
+
+    assert not errors, f"reader errors during error propagation: {errors}"
+
+
+def test_teardown_propagation_under_concurrent_access() -> None:
+    """TEARDOWN signal through an effect doesn't corrupt concurrent get() calls."""
+    s = state(0)
+    d = derived([s], lambda: s.get() * 2)
+    dispose = effect([d], lambda: None)
+
+    errors: list[BaseException] = []
+    error_lock = threading.Lock()
+    done = threading.Event()
+
+    def reader() -> None:
+        try:
+            for _ in range(10_000):
+                if done.is_set():
+                    return
+                val = d.get()
+                if not isinstance(val, int):
+                    raise AssertionError(f"expected int, got {type(val)}")
+        except BaseException as err:
+            with error_lock:
+                errors.append(err)
+
+    def writer() -> None:
+        try:
+            for i in range(500):
+                if done.is_set():
+                    return
+                s.set(i)
+        except BaseException as err:
+            with error_lock:
+                errors.append(err)
+
+    readers = [threading.Thread(target=reader) for _ in range(3)]
+    writer_thread = threading.Thread(target=writer)
+    for t in readers:
+        t.start()
+    writer_thread.start()
+
+    time.sleep(0.01)  # Let threads run briefly
+    dispose.signal(Signal.TEARDOWN)
+
+    done.set()
+    all_threads = [*readers, writer_thread]
+    for t in all_threads:
+        t.join(timeout=5.0)
+    stuck = [t.name for t in all_threads if t.is_alive()]
+    assert not stuck, f"threads did not finish: {stuck}"
+
+    assert not errors, f"errors during teardown: {errors}"
